@@ -44,7 +44,7 @@ const IUINT32 IKCP_THRESH_MIN = 2;
 const IUINT32 IKCP_PROBE_INIT = 7000;		// 7 secs to probe window size
 const IUINT32 IKCP_PROBE_LIMIT = 120000;	// up to 120 secs to probe window
 const IUINT32 IKCP_FASTACK_LIMIT = 5;		// max times to trigger fastack
-
+const IUINT32 IKCP_RESERVED_HEAD = 16;
 
 //---------------------------------------------------------------------
 // encode / decode
@@ -254,7 +254,7 @@ ikcpcb* ikcp_create(IUINT32 conv, void *user)
 	kcp->mss = kcp->mtu - IKCP_OVERHEAD;
 	kcp->stream = 0;
 
-	kcp->buffer = (char*)ikcp_malloc(kcp->mtu);
+	kcp->buffer = (char*)ikcp_malloc(IKCP_RESERVED_HEAD + kcp->mtu);
 	if (kcp->buffer == NULL) {
 		ikcp_free(kcp);
 		return NULL;
@@ -953,7 +953,7 @@ static int ikcp_wnd_unused(const ikcpcb *kcp)
 void ikcp_flush(ikcpcb *kcp)
 {
 	IUINT32 current = kcp->current;
-	char *buffer = kcp->buffer;
+	char *buffer = kcp->buffer + IKCP_RESERVED_HEAD;
 	char *ptr = buffer;
 	int count, size, i, n, ack_max, need;
 	IUINT32 resent, cwnd;
@@ -1254,7 +1254,7 @@ int ikcp_setmtu(ikcpcb *kcp, int mtu)
 	char *buffer;
 	if (mtu < 50 || mtu < (int)IKCP_OVERHEAD) 
 		return -1;
-	buffer = (char*)ikcp_malloc(mtu);
+	buffer = (char*)ikcp_malloc(IKCP_RESERVED_HEAD + mtu);
 	if (buffer == NULL) 
 		return -2;
 	kcp->mtu = mtu;
