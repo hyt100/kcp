@@ -17,7 +17,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-
+#define SN_TS_SIZE   (sizeof(IUINT32) * 2)
 
 //=====================================================================
 // KCP BASIC
@@ -676,6 +676,12 @@ static void ikcp_ack_get(const ikcpcb *kcp, int p, IUINT32 *sn, IUINT32 *ts)
 	if (ts) ts[0] = kcp->acklist[p * 2 + 1];
 }
 
+static char *ikcp_ack_get_block(const ikcpcb *kcp, int start, int num, char *out)
+{
+	size_t size = (size_t)SN_TS_SIZE * num;
+	memcpy((void *)out, (void *)&kcp->acklist[start*2], size);
+	return out + size;
+}
 
 //---------------------------------------------------------------------
 // parse data
@@ -751,6 +757,8 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 	IUINT32 prev_una = kcp->snd_una;
 	IUINT32 maxack = 0, latest_ts = 0;
 	int flag = 0;
+	const char *ack_data;
+	IUINT32 ack_len;
 
 	if (ikcp_canlog(kcp, IKCP_LOG_INPUT)) {
 		ikcp_log(kcp, IKCP_LOG_INPUT, "[RI] %d bytes", (int)size);
@@ -790,33 +798,47 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 		ikcp_shrink_buf(kcp);
 
 		if (cmd == IKCP_CMD_ACK) {
-			if (_itimediff(kcp->current, ts) >= 0) {
-				ikcp_update_ack(kcp, _itimediff(kcp->current, ts));
-			}
-			ikcp_parse_ack(kcp, sn);
-			ikcp_shrink_buf(kcp);
-			if (flag == 0) {
-				flag = 1;
-				maxack = sn;
-				latest_ts = ts;
-			}	else {
-				if (_itimediff(sn, maxack) > 0) {
-				#ifndef IKCP_FASTACK_CONSERVE
+			ack_data = data;
+			ack_len = len;
+
+			if (ack_len % SN_TS_SIZE != 0)
+				return -4;
+
+			while (1) {
+				if (_itimediff(kcp->current, ts) >= 0) {
+					ikcp_update_ack(kcp, _itimediff(kcp->current, ts));
+				}
+				ikcp_parse_ack(kcp, sn);
+				ikcp_shrink_buf(kcp);
+				if (flag == 0) {
+					flag = 1;
 					maxack = sn;
 					latest_ts = ts;
-				#else
-					if (_itimediff(ts, latest_ts) > 0) {
+				}	else {
+					if (_itimediff(sn, maxack) > 0) {
+					#ifndef IKCP_FASTACK_CONSERVE
 						maxack = sn;
 						latest_ts = ts;
+					#else
+						if (_itimediff(ts, latest_ts) > 0) {
+							maxack = sn;
+							latest_ts = ts;
+						}
+					#endif
 					}
-				#endif
 				}
-			}
-			if (ikcp_canlog(kcp, IKCP_LOG_IN_ACK)) {
-				ikcp_log(kcp, IKCP_LOG_IN_ACK, 
-					"input ack: sn=%lu rtt=%ld rto=%ld", (unsigned long)sn, 
-					(long)_itimediff(kcp->current, ts),
-					(long)kcp->rx_rto);
+				if (ikcp_canlog(kcp, IKCP_LOG_IN_ACK)) {
+					ikcp_log(kcp, IKCP_LOG_IN_ACK, 
+						"input ack: sn=%lu rtt=%ld rto=%ld", (unsigned long)sn, 
+						(long)_itimediff(kcp->current, ts),
+						(long)kcp->rx_rto);
+				}
+
+				if (ack_len == 0)
+					break;
+				ack_data = ikcp_decode32u(ack_data, &ts);
+				ack_data = ikcp_decode32u(ack_data, &sn);
+				ack_len -= SN_TS_SIZE;
 			}
 		}
 		else if (cmd == IKCP_CMD_PUSH) {
@@ -933,7 +955,7 @@ void ikcp_flush(ikcpcb *kcp)
 	IUINT32 current = kcp->current;
 	char *buffer = kcp->buffer;
 	char *ptr = buffer;
-	int count, size, i;
+	int count, size, i, n, ack_max, need;
 	IUINT32 resent, cwnd;
 	IUINT32 rtomin;
 	struct IQUEUEHEAD *p;
@@ -954,18 +976,26 @@ void ikcp_flush(ikcpcb *kcp)
 	seg.ts = 0;
 
 	// flush acknowledges
+	ack_max = (int)((kcp->mtu - IKCP_OVERHEAD) / SN_TS_SIZE + 1);
 	count = kcp->ackcount;
-	for (i = 0; i < count; i++) {
+	for (i = 0; i < count;) {
+		n = _imin_(ack_max, count - i);
+		seg.len = (int)SN_TS_SIZE * (n - 1);
+		need = (int)IKCP_OVERHEAD + seg.len;
 		size = (int)(ptr - buffer);
-		if (size + (int)IKCP_OVERHEAD > (int)kcp->mtu) {
+		if (size + need > (int)kcp->mtu) {
 			ikcp_output(kcp, buffer, size);
 			ptr = buffer;
 		}
 		ikcp_ack_get(kcp, i, &seg.sn, &seg.ts);
 		ptr = ikcp_encode_seg(ptr, &seg);
+		ptr = ikcp_ack_get_block(kcp, i+1, n-1, ptr);
+
+		i += n;
 	}
 
 	kcp->ackcount = 0;
+	seg.len = 0;
 
 	// probe window size (if remote window size equals zero)
 	if (kcp->rmt_wnd == 0) {
@@ -1081,7 +1111,6 @@ void ikcp_flush(ikcpcb *kcp)
 		}
 
 		if (needsend) {
-			int need;
 			segment->ts = current;
 			segment->wnd = seg.wnd;
 			segment->una = kcp->rcv_nxt;
