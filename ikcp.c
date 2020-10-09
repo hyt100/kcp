@@ -678,9 +678,14 @@ static void ikcp_ack_get(const ikcpcb *kcp, int p, IUINT32 *sn, IUINT32 *ts)
 
 static char *ikcp_ack_get_block(const ikcpcb *kcp, int start, int num, char *out)
 {
-	size_t size = (size_t)SN_TS_SIZE * num;
-	memcpy((void *)out, (void *)&kcp->acklist[start*2], size);
-	return out + size;
+	int i;
+	char *ptr = out;
+
+	for (i=start; i<(start + num); ++i) {
+		ptr = ikcp_encode32u(ptr, kcp->acklist[i * 2 + 1]); //ts
+		ptr = ikcp_encode32u(ptr, kcp->acklist[i * 2 + 0]); //sn
+	}
+	return ptr;
 }
 
 //---------------------------------------------------------------------
