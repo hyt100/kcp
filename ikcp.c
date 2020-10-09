@@ -17,7 +17,9 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-#define SN_TS_SIZE   (sizeof(IUINT32) * 2)
+#define IKCP_SN_TS_SIZE      (sizeof(IUINT32) * 2)
+#define IKCP_RESERVED_HEAD   16
+#define IKCP_RESERVED_TAIL   16
 
 //=====================================================================
 // KCP BASIC
@@ -44,7 +46,6 @@ const IUINT32 IKCP_THRESH_MIN = 2;
 const IUINT32 IKCP_PROBE_INIT = 7000;		// 7 secs to probe window size
 const IUINT32 IKCP_PROBE_LIMIT = 120000;	// up to 120 secs to probe window
 const IUINT32 IKCP_FASTACK_LIMIT = 5;		// max times to trigger fastack
-const IUINT32 IKCP_RESERVED_HEAD = 16;
 
 //---------------------------------------------------------------------
 // encode / decode
@@ -254,7 +255,7 @@ ikcpcb* ikcp_create(IUINT32 conv, void *user)
 	kcp->mss = kcp->mtu - IKCP_OVERHEAD;
 	kcp->stream = 0;
 
-	kcp->buffer = (char*)ikcp_malloc(IKCP_RESERVED_HEAD + kcp->mtu);
+	kcp->buffer = (char*)ikcp_malloc(IKCP_RESERVED_HEAD + kcp->mtu + IKCP_RESERVED_TAIL);
 	if (kcp->buffer == NULL) {
 		ikcp_free(kcp);
 		return NULL;
@@ -806,7 +807,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 			ack_data = data;
 			ack_len = len;
 
-			if (ack_len % SN_TS_SIZE != 0)
+			if (ack_len % IKCP_SN_TS_SIZE != 0)
 				return -4;
 
 			while (1) {
@@ -843,7 +844,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 					break;
 				ack_data = ikcp_decode32u(ack_data, &ts);
 				ack_data = ikcp_decode32u(ack_data, &sn);
-				ack_len -= SN_TS_SIZE;
+				ack_len -= IKCP_SN_TS_SIZE;
 			}
 		}
 		else if (cmd == IKCP_CMD_PUSH) {
@@ -981,11 +982,11 @@ void ikcp_flush(ikcpcb *kcp)
 	seg.ts = 0;
 
 	// flush acknowledges
-	ack_max = (int)((kcp->mtu - IKCP_OVERHEAD) / SN_TS_SIZE + 1);
+	ack_max = (int)((kcp->mtu - IKCP_OVERHEAD) / IKCP_SN_TS_SIZE + 1);
 	count = kcp->ackcount;
 	for (i = 0; i < count;) {
 		n = _imin_(ack_max, count - i);
-		seg.len = (int)SN_TS_SIZE * (n - 1);
+		seg.len = (int)IKCP_SN_TS_SIZE * (n - 1);
 		need = (int)IKCP_OVERHEAD + seg.len;
 		size = (int)(ptr - buffer);
 		if (size + need > (int)kcp->mtu) {
@@ -1259,7 +1260,7 @@ int ikcp_setmtu(ikcpcb *kcp, int mtu)
 	char *buffer;
 	if (mtu < 50 || mtu < (int)IKCP_OVERHEAD) 
 		return -1;
-	buffer = (char*)ikcp_malloc(IKCP_RESERVED_HEAD + mtu);
+	buffer = (char*)ikcp_malloc(IKCP_RESERVED_HEAD + mtu + IKCP_RESERVED_TAIL);
 	if (buffer == NULL) 
 		return -2;
 	kcp->mtu = mtu;
